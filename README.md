@@ -1,56 +1,82 @@
-# JARVIS — Frontend (Phase 1 UI)
+# JARVIS — Phase 1 (UI + minimal test backend)
 
-This is the **frontend only**. No AI Manager, no providers, no voice, no
-memory — just the desktop shell and the orb UI, fully wired with
-placeholder hooks for backend work to plug into later.
+A working desktop shell with a real (if minimal) AI backend wired in:
+type a message in the composer, it goes to Claude, the reply comes back
+into the transcript, and the orb reacts (idle → speaking → idle).
 
-## Run it
+This is intentionally small — one provider, no memory, no voice, no
+routing logic. It exists so you can confirm the whole pipe works
+(UI → bridge → provider → UI) before building out the real AI Manager.
+
+## Setup
 
 ```
 pip install -r requirements.txt
+cp .env.example .env
+```
+
+Open `.env` and paste in your own key:
+
+```
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+## Run
+
+```
 python main.py
 ```
 
-Frameless window opens. Press **Esc** to quit (no close button yet — that's
-a frontend polish item, not a backend one).
+Frameless window opens. Type in the composer bar and press Enter/Send.
+Esc to quit.
 
-## What's actually here
+## What's real vs. what's still a stub
 
-- `main.py` — PySide6 desktop shell. Opens a native window, loads the orb
-  UI into a `QWebEngineView`.
-- `ui/orb.html` — the entire visual frontend: animated orb (idle /
-  listening / speaking states), transcript panel, text composer bar. Pure
-  HTML/CSS/JS, no framework.
+**Real and working:**
+- `main.py` — desktop shell, registers a `QWebChannel` bridge
+- `backend/bridge.py` — the `Bridge` QObject; `send_message` is called
+  from JS, calls the AI Manager, emits the reply back
+- `backend/ai_manager.py` — thin wrapper holding "the current provider"
+- `backend/providers/anthropic_provider.py` — actual Claude API call via
+  the official SDK
+- `backend/config.py` — loads `.env`, no hardcoded keys anywhere
+- `ui/orb.html` — composer calls `window.bridge.send_message(text)` for
+  real; orb reacts to real reply timing, not a fake delay
 
-## What's a stub, waiting for backend
+**Still stubs / not built yet (later phases per Phases.md):**
+- Voice (Phase 2) — composer is a deliberate text fallback until then
+- Memory (Phase 2) — no conversation history is persisted or sent back
+  to the model; each message is a fresh, context-free call
+- Multiple providers / routing (Phase 5) — only Anthropic is wired up;
+  `backend/providers/base.py` is the interface future providers
+  (Ollama, Gemini, etc.) should implement
+- Automation, plugins (Phase 3) — not present
 
-Every integration point is marked with a comment containing `BACKEND TODO`
-or `BACKEND HOOK`. Search for those strings in both files to find them.
-Specifically:
+## File structure
 
-1. **`main.py` → `set_orb_mode(mode)`**
-   Already works standalone. Backend should call this to reflect real
-   state, e.g. `window.set_orb_mode("listening")` when the mic opens.
+```
+jarvis_app/
+├── main.py                          # desktop shell + QWebChannel wiring
+├── .env.example                     # copy to .env, add your key
+├── .gitignore                       # keeps .env out of git
+├── requirements.txt
+├── ui/
+│   └── orb.html                     # orb + transcript + composer (frontend)
+└── backend/
+    ├── config.py                    # .env loading
+    ├── ai_manager.py                # holds the active provider
+    ├── bridge.py                    # QWebChannel bridge (JS <-> Python)
+    └── providers/
+        ├── base.py                  # Provider interface (abstract)
+        └── anthropic_provider.py    # Claude implementation
+```
 
-2. **`main.py` → `add_user_message(text)` / `add_assistant_message(text)`**
-   Already work standalone. Backend calls these to push real conversation
-   turns into the transcript panel instead of the current placeholder text.
+## Known limitations (by design, for now)
 
-3. **`ui/orb.html` → composer `submit` handler**
-   Currently fakes a reply after a timeout, purely so the UI can be demoed
-   without a backend attached. Replace the fake `setTimeout` block with a
-   real call once a `QWebChannel` bridge exists (see next point).
-
-4. **`QWebChannel` bridge (not implemented yet)**
-   The clean way for JS to call Python directly (e.g. "user pressed send"
-   → Python AI Manager → response) rather than Python only pushing one-way
-   into the page. Both files have a commented-out sketch of the wiring
-   under `BACKEND TODO`. This is probably the first real backend task.
-
-## Design notes
-
-- Palette, orb states, and animations are deliberately tuned (not default
-  gradients) — see the earlier design rationale if you want the token
-  values reasoned through again.
-- The composer input is a deliberate fallback so the app is usable by text
-  even before voice (Phase 2) exists.
+- No conversation memory — every message is stateless. Fine for testing
+  the pipe works; not fine for actual use.
+- Single provider, no fallback/routing.
+- `Bridge.send_message` calls the Anthropic SDK synchronously, which
+  blocks the Qt event loop briefly per request. Rules.md calls for
+  "async-first" — this is the one deliberate shortcut, flagged so it
+  doesn't get mistaken for the final design. Worth fixing before Phase 2.

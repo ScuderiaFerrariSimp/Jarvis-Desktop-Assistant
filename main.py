@@ -1,14 +1,17 @@
 """
-JARVIS — desktop shell (Phase 1: UI only)
+JARVIS — desktop shell (Phase 1: UI + minimal test backend)
 
 Loads the orb UI (ui/orb.html) into a native, borderless, always-blue
-desktop window using PySide6 + QWebEngineView.
+desktop window using PySide6 + QWebEngineView, and wires it to a real
+(if minimal) AI Manager via QWebChannel so the composer actually talks
+to Claude.
+
+Setup:
+    pip install -r requirements.txt
+    cp .env.example .env   # then paste your ANTHROPIC_API_KEY into .env
 
 Run:
     python main.py
-
-Requires:
-    pip install PySide6 PySide6-Addons
 """
 
 import json
@@ -18,7 +21,10 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtWidgets import QApplication, QMainWindow
 from PySide6.QtWebEngineWidgets import QWebEngineView
+from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtGui import QIcon
+
+from backend import Bridge
 
 
 UI_DIR = Path(__file__).parent / "ui"
@@ -42,8 +48,29 @@ class JarvisWindow(QMainWindow):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
 
         self.view = QWebEngineView(self)
+
+        # --- Backend wiring -------------------------------------------
+        # Bridge exposes send_message(text) to JS, and emits reply_ready /
+        # error_occurred back to Python when the AI Manager responds.
+        self.bridge = Bridge()
+        self.bridge.reply_ready.connect(self._on_reply_ready)
+        self.bridge.error_occurred.connect(self._on_error)
+
+        self.channel = QWebChannel()
+        self.channel.registerObject("bridge", self.bridge)
+        self.view.page().setWebChannel(self.channel)
+        # -----------------------------------------------------------------
+
         self.view.load(QUrl.fromLocalFile(str(ORB_HTML.resolve())))
         self.setCentralWidget(self.view)
+
+    def _on_reply_ready(self, text: str) -> None:
+        self.add_assistant_message(text)
+        self.set_orb_mode("idle")
+
+    def _on_error(self, message: str) -> None:
+        self.add_assistant_message(f"[error] {message}")
+        self.set_orb_mode("idle")
 
     def set_orb_mode(self, mode: str) -> None:
         """Drive the orb's visual state from Python.
@@ -68,18 +95,9 @@ class JarvisWindow(QMainWindow):
         safe = json.dumps(text)
         self.view.page().runJavaScript(f"window.addAssistantMessage({safe})")
 
-    # BACKEND TODO: register a QWebChannel here so JS can call Python directly
-    # (e.g. when the composer's Send button is clicked), instead of Python only
-    # pushing one-way into the page. Rough shape:
-    #
-    #   from PySide6.QtWebChannel import QWebChannel
-    #   self.channel = QWebChannel()
-    #   self.channel.registerObject("bridge", some_bridge_object)
-    #   self.view.page().setWebChannel(self.channel)
-    #
-    # `some_bridge_object` would be a QObject subclass with @Slot methods like
-    # send_message(text) that hand off to the AI Manager. See ui/orb.html for
-    # the matching frontend-side hookup (search "QWebChannel bridge placeholder").
+    # QWebChannel bridge is registered in __init__ above. See backend/bridge.py
+    # for the Python side, and ui/orb.html (search "QWebChannel bridge") for
+    # the matching JS side that calls window.bridge.send_message(text).
 
     def keyPressEvent(self, event):
         # Esc to quit — since the window is frameless, there's no close button yet.
